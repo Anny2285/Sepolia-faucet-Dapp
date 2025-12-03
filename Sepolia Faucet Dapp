@@ -1,0 +1,72 @@
+import dotenv from 'dotenv';
+import TelegramBot from 'node-telegram-bot-api';
+import Web3 from 'web3';
+
+dotenv.config();
+
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const web3 = new Web3(process.env.INFURA_URL);
+
+const AMOUNT_TO_SEND = web3.utils.toWei('0.2', 'ether');
+const COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours in ms
+
+const userLastRequest = {};
+const addressLastRequest = {};
+
+bot.on('message', async (msg) => {
+  const address = msg.text.trim();
+  const userId = msg.from.id;
+
+  if (!web3.utils.isAddress(address)) {
+    // Ignore messages that are not valid Ethereum addresses
+    return;
+  }
+
+  const now = Date.now();
+
+  if (userLastRequest[userId] && now - userLastRequest[userId] < COOLDOWN) {
+    bot.sendMessage(msg.chat.id, 'You can only request once every 24 hours.');
+    return;
+  }
+  if (addressLastRequest[address] && now - addressLastRequest[address] < COOLDOWN) {
+    bot.sendMessage(msg.chat.id, 'This address has already received Sepolia in the last 24 hours.');
+    return;
+  }
+
+  try {
+    const nonce = await web3.eth.getTransactionCount(process.env.WALLET_ADDRESS);
+    const tx = {
+      nonce,
+      to: address,
+      value: AMOUNT_TO_SEND,
+      gas: 21000,
+      gasPrice: await web3.eth.getGasPrice(),
+      chainId: 11155111 // Sepolia
+    };
+
+    const signedTx = await web3.eth.accounts.signTransaction(tx, process.env.PRIVATE_KEY);
+    const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+
+    userLastRequest[userId] = now;
+    addressLastRequest[address] = now;
+
+    bot.sendMessage(msg.chat.id, `Sent 0.2 Sepolia ETH! Tx: https://sepolia.etherscan.io/tx/${receipt.transactionHash}`);
+  } catch (err) {
+    bot.sendMessage(msg.chat.id, `Error sending transaction: ${err.message}`);
+  }
+});
+
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    `Welcome to the Sepolia Access point Bot!
+
+💧 This faucet sends 0.2 SepoliaETH to your wallet when you request.
+⚡ Perfect for testing smart contracts, dApps, and development on the Sepolia network.
+
+✅ Simply type your Sepolia wallet address to get started.
+🔄 Limit: 1 request per 24 hours per user.
+
+🚀 Happy building on Sepolia!`
+  );
+});
